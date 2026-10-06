@@ -26,7 +26,7 @@ import { createBrainProfile } from "@/types/profile";
 import { DEFAULT_STATS, createEmptyLifetimeCategoryStat } from "@/types/game";
 import { emptyCategoryRecord } from "@/types/categories";
 import { getRunArchetype } from "@/lib/game/runArchetypes";
-import { pickBossForFloor, BOSS_DEFINITIONS } from "@/lib/game/bosses";
+import { pickBossForFloor, BOSS_DEFINITIONS, resolveBossAdvance, bossRetryStageIndex, formatBossRetryAnnouncement, formatBossStageAnnouncement, bossStageForceVariant, isLinkedMemoryBoss } from "@/lib/game/bosses";
 import { DIFFICULTY_TIERS } from "@/lib/game/modifiers";
 import { composeRunEffects, resolveRunConfig } from "@/lib/game/runConfig";
 import { normalizeData, STORAGE_LIMITS } from "@/lib/storage/gameStorage";
@@ -245,6 +245,94 @@ describe("bosses & archetypes", () => {
       "logician",
     ]);
     expect(a.id).toBe(b.id);
+  });
+
+  it("Architect last stage resolves to clear, not continue", () => {
+    const architect = BOSS_DEFINITIONS.find((b) => b.id === "architect")!;
+    expect(architect.stages.map((s) => s.label)).toEqual([
+      "Observe the grid",
+      "Track the shift",
+    ]);
+    // Stage 0 correct → continue to Track the shift
+    expect(resolveBossAdvance(0, architect.stages.length, true, false)).toBe(
+      "continue"
+    );
+    // Stage 1 (Track the shift) correct → leave boss floor
+    expect(resolveBossAdvance(1, architect.stages.length, true, false)).toBe(
+      "clear"
+    );
+    // Wrong / second-chance → retry same stage
+    expect(resolveBossAdvance(1, architect.stages.length, false, false)).toBe(
+      "retry"
+    );
+    expect(resolveBossAdvance(1, architect.stages.length, true, true)).toBe(
+      "retry"
+    );
+  });
+
+  it("Archivist is memorize → attention → recall of the same sequence", () => {
+    const archivist = BOSS_DEFINITIONS.find((b) => b.id === "archivist")!;
+    expect(archivist.stages.map((s) => s.kind)).toEqual([
+      "memorize",
+      "solve",
+      "recall",
+    ]);
+    expect(archivist.stages.map((s) => s.category)).toEqual([
+      "memory",
+      "attention",
+      "memory",
+    ]);
+    expect(resolveBossAdvance(0, archivist.stages.length, true, false)).toBe(
+      "continue"
+    );
+    expect(resolveBossAdvance(1, archivist.stages.length, true, false)).toBe(
+      "continue"
+    );
+    expect(resolveBossAdvance(2, archivist.stages.length, true, false)).toBe(
+      "clear"
+    );
+    // Fail on distraction or recall → restart from memorize
+    expect(bossRetryStageIndex(archivist)).toBe(0);
+    expect(formatBossRetryAnnouncement(archivist, 0)).toMatch(/Retry/i);
+    expect(formatBossRetryAnnouncement(archivist, 0)).toMatch(/start over/i);
+  });
+
+  it("non-memory bosses retry the failed stage only", () => {
+    const architect = BOSS_DEFINITIONS.find((b) => b.id === "architect")!;
+    expect(bossRetryStageIndex(architect)).toBe(-1);
+    expect(isLinkedMemoryBoss(architect)).toBe(false);
+    expect(formatBossRetryAnnouncement(architect, 1)).toBe(
+      "Retry — The Architect: Track the shift"
+    );
+  });
+
+  it("each boss stage forces a distinct puzzle family", () => {
+    const architect = BOSS_DEFINITIONS.find((b) => b.id === "architect")!;
+    expect(bossStageForceVariant(architect, 0)).toBe("rotation");
+    expect(bossStageForceVariant(architect, 1)).toBe("block-shift");
+    expect(formatBossStageAnnouncement(architect, 0)).toBe(
+      "The Architect — Stage 1/2: Observe the grid"
+    );
+    expect(formatBossStageAnnouncement(architect, 1)).toBe(
+      "The Architect — Stage 2/2: Track the shift"
+    );
+
+    const logician = BOSS_DEFINITIONS.find((b) => b.id === "logician")!;
+    expect(bossStageForceVariant(logician, 0)).toBe("symbol-pattern");
+    expect(bossStageForceVariant(logician, 1)).toBe("conditional");
+
+    const calculator = BOSS_DEFINITIONS.find((b) => b.id === "calculator")!;
+    expect(bossStageForceVariant(calculator, 0)).toBe("arithmetic");
+    expect(bossStageForceVariant(calculator, 1)).toBe("target");
+
+    const sentinel = BOSS_DEFINITIONS.find((b) => b.id === "sentinel")!;
+    expect(bossStageForceVariant(sentinel, 0)).toBe("odd");
+    expect(bossStageForceVariant(sentinel, 1)).toBe("rule-switch");
+
+    const archivist = BOSS_DEFINITIONS.find((b) => b.id === "archivist")!;
+    expect(isLinkedMemoryBoss(archivist)).toBe(true);
+    expect(bossStageForceVariant(archivist, 0)).toBe("sequence");
+    expect(bossStageForceVariant(archivist, 2)).toBe("sequence");
   });
 
   it("archetype detection is deterministic", () => {

@@ -16,6 +16,11 @@ import { getChallenge } from "@/lib/game/challenges";
 import { getWeeklyChallenge } from "@/lib/game/weeklyChallenge";
 import { PUZZLE_TYPE_LABELS, type PuzzleType } from "@/types/puzzles";
 import { puzzleInitialPhase } from "@/lib/puzzles";
+import {
+  FOCUS_CATEGORY_OPTS,
+  choiceTrialLabel,
+  pickChoicePathOptions,
+} from "@/lib/game/choicePath";
 
 export function PlayScreen() {
   const router = useRouter();
@@ -34,15 +39,24 @@ export function PlayScreen() {
   const dismissAnnouncement = useGameStore((s) => s.dismissAnnouncement);
   const choosePath = useGameStore((s) => s.choosePath);
   const chooseGamble = useGameStore((s) => s.chooseGamble);
-  const [confirmingUpgrade, setConfirmingUpgrade] = useState<string | null>(
-    null
-  );
+  const [pendingUpgradeId, setPendingUpgradeId] = useState<string | null>(null);
+  const [specialistCategory, setSpecialistCategory] =
+    useState<PuzzleType | null>(null);
+  const [committingUpgrade, setCommittingUpgrade] = useState(false);
   const confirmKey = `${run.floor}-${run.status}`;
   const [lastConfirmKey, setLastConfirmKey] = useState(confirmKey);
   if (lastConfirmKey !== confirmKey) {
     setLastConfirmKey(confirmKey);
-    setConfirmingUpgrade(null);
+    setPendingUpgradeId(null);
+    setSpecialistCategory(null);
+    setCommittingUpgrade(false);
   }
+
+  const pendingUpgrade = pendingUpgradeId
+    ? getUpgradeById(pendingUpgradeId)
+    : undefined;
+  const needsSpecialistPick =
+    pendingUpgrade?.effect.kind === "specialist" && !specialistCategory;
 
   useEffect(() => {
     if (run.status === "idle") {
@@ -124,6 +138,18 @@ export function PlayScreen() {
   }
 
   if (run.status === "upgrade") {
+    const commitUpgrade = () => {
+      if (!pendingUpgradeId || committingUpgrade) return;
+      const u = getUpgradeById(pendingUpgradeId);
+      if (u?.effect.kind === "specialist" && !specialistCategory) return;
+      setCommittingUpgrade(true);
+      if (u?.effect.kind === "specialist" && specialistCategory) {
+        selectUpgrade(pendingUpgradeId, specialistCategory);
+      } else {
+        selectUpgrade(pendingUpgradeId);
+      }
+    };
+
     return (
       <MobileContainer>
         <GameHeader
@@ -134,23 +160,75 @@ export function PlayScreen() {
           maxLives={run.maxLives}
           upgradeCount={run.upgrades.length}
         />
-        <UpgradeSelect
-          choices={run.pendingUpgradeChoices}
-          announcement={run.announcement}
-          confirming={confirmingUpgrade}
-          owned={run.upgrades}
-          rerolls={run.upgradeRerolls}
-          onReroll={rerollUpgrades}
-          onSelect={(id) => {
-            const u = getUpgradeById(id);
-            setConfirmingUpgrade(u?.name ?? id);
-            if (u?.effect.kind === "specialist") {
-              selectUpgrade(id, "logic");
-            } else {
-              selectUpgrade(id);
-            }
-          }}
-        />
+        {needsSpecialistPick ? (
+          <div className="flex flex-1 flex-col gap-4 pt-4">
+            <div className="text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-300/90">
+                Specialist
+              </p>
+              <h2 className="mt-2 text-2xl font-bold text-white">
+                Pick a focus category
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">
+                +30% score in that category, −5% elsewhere
+              </p>
+            </div>
+            <div className="flex flex-col gap-2">
+              {FOCUS_CATEGORY_OPTS.map((cat) => (
+                <Button
+                  key={cat}
+                  fullWidth
+                  size="lg"
+                  variant={specialistCategory === cat ? "primary" : "secondary"}
+                  onClick={() => setSpecialistCategory(cat)}
+                >
+                  {PUZZLE_TYPE_LABELS[cat]}
+                </Button>
+              ))}
+            </div>
+            <Button
+              fullWidth
+              size="lg"
+              disabled={!specialistCategory}
+              onClick={() => {
+                if (!specialistCategory) return;
+                setCommittingUpgrade(true);
+                selectUpgrade(pendingUpgradeId!, specialistCategory);
+              }}
+            >
+              Confirm Specialist
+            </Button>
+            <Button
+              fullWidth
+              variant="ghost"
+              onClick={() => {
+                setPendingUpgradeId(null);
+                setSpecialistCategory(null);
+              }}
+            >
+              Back
+            </Button>
+          </div>
+        ) : (
+          <UpgradeSelect
+            choices={run.pendingUpgradeChoices}
+            announcement={run.announcement}
+            pendingName={pendingUpgrade?.name ?? null}
+            committing={committingUpgrade}
+            owned={run.upgrades}
+            rerolls={run.upgradeRerolls}
+            onReroll={rerollUpgrades}
+            onPick={(id) => {
+              setPendingUpgradeId(id);
+              setSpecialistCategory(null);
+            }}
+            onConfirm={commitUpgrade}
+            onCancel={() => {
+              setPendingUpgradeId(null);
+              setSpecialistCategory(null);
+            }}
+          />
+        )}
       </MobileContainer>
     );
   }
@@ -186,19 +264,24 @@ export function PlayScreen() {
             </p>
             <p className="max-w-xs text-sm text-slate-300">{run.announcement}</p>
             <div className="flex w-full flex-col gap-2">
-              {(
-                [
-                  ["memory", "Memory Trial"],
-                  ["logic", "Logic Trial"],
-                ] as const
-              ).map(([cat, label]) => (
+              {pickChoicePathOptions(
+                run.seed,
+                run.floor,
+                run.recentCategories,
+                Object.fromEntries(
+                  Object.entries(run.categoryStats).map(([k, v]) => [
+                    k,
+                    v.attempted,
+                  ])
+                ) as Partial<Record<PuzzleType, number>>
+              ).map((cat) => (
                 <Button
                   key={cat}
                   fullWidth
                   size="lg"
-                  onClick={() => choosePath(cat as PuzzleType)}
+                  onClick={() => choosePath(cat)}
                 >
-                  {label} (+30% reward)
+                  {choiceTrialLabel(cat)} (+30% reward)
                 </Button>
               ))}
             </div>

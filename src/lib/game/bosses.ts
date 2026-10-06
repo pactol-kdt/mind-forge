@@ -195,3 +195,91 @@ export function pickBossForFloor(
 export function getBoss(id: string): BossDefinition | undefined {
   return BOSS_DEFINITIONS.find((b) => b.id === id);
 }
+
+/**
+ * Decide boss stage transition at answer time.
+ * Using this (not a post-increment index check) prevents the final stage
+ * from looping when index / defeated counters get out of sync.
+ */
+export function resolveBossAdvance(
+  stageIndex: number,
+  stageCount: number,
+  correct: boolean,
+  secondChanceSaved: boolean
+): "continue" | "retry" | "clear" {
+  if (!correct || secondChanceSaved) return "retry";
+  if (stageIndex + 1 < stageCount) return "continue";
+  return "clear";
+}
+
+/** Linked memory bosses (Archivist): memorize → distract → recall. */
+export function isLinkedMemoryBoss(boss: BossDefinition): boolean {
+  return (
+    boss.stages.some((s) => s.kind === "memorize") &&
+    boss.stages.some((s) => s.kind === "recall")
+  );
+}
+
+/** Linked memory bosses restart from memorize on any fail. */
+export function bossRetryStageIndex(boss: BossDefinition): number {
+  if (!isLinkedMemoryBoss(boss)) return -1;
+  const memorizeIdx = boss.stages.findIndex((s) => s.kind === "memorize");
+  return memorizeIdx >= 0 ? memorizeIdx : -1;
+}
+
+export function formatBossRetryAnnouncement(
+  boss: BossDefinition,
+  stageIndex: number
+): string {
+  const stage = boss.stages[stageIndex];
+  const label = stage?.label ?? "challenge";
+  const fromStart =
+    bossRetryStageIndex(boss) === stageIndex && stage?.kind === "memorize";
+  if (fromStart) {
+    return `Retry — ${boss.name}: start over at ${label}`;
+  }
+  return `Retry — ${boss.name}: ${label}`;
+}
+
+export function formatBossStageAnnouncement(
+  boss: BossDefinition,
+  stageIndex: number
+): string {
+  const stage = boss.stages[stageIndex];
+  const label = stage?.label ?? "challenge";
+  const n = stageIndex + 1;
+  const total = boss.stages.length;
+  return `${boss.name} — Stage ${n}/${total}: ${label}`;
+}
+
+/**
+ * Distinct puzzle family per boss stage so stage 2 is not a clone of stage 1.
+ */
+export function bossStageForceVariant(
+  boss: BossDefinition,
+  stageIndex: number
+): string | undefined {
+  const stage = boss.stages[stageIndex];
+  if (!stage) return undefined;
+
+  if (stage.kind === "memorize" || stage.kind === "recall") return "sequence";
+  if (stage.kind === "solve") return undefined;
+
+  switch (boss.id) {
+    case "architect":
+      return stageIndex === 0 ? "rotation" : "block-shift";
+    case "logician":
+      return stageIndex === 0 ? "symbol-pattern" : "conditional";
+    case "calculator":
+      return stageIndex === 0 ? "arithmetic" : "target";
+    case "sentinel":
+      return stageIndex === 0 ? "odd" : "rule-switch";
+    case "mindforge":
+      if (stage.category === "memory") return "sequence";
+      if (stage.category === "logic") return "deduction-lite";
+      if (stage.category === "spatial") return "transform";
+      return undefined;
+    default:
+      return undefined;
+  }
+}

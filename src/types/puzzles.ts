@@ -146,6 +146,10 @@ export interface MemoryPuzzle extends BasePuzzle {
   /** multiple choice recall */
   sequenceChoices?: MemorySymbol[][];
   correctChoiceIndex?: number;
+  /** Archivist stage 1: show sequence only, then auto-continue */
+  memorizeOnly?: boolean;
+  /** Archivist stage 3: skip re-showing the sequence */
+  skipPresenting?: boolean;
 }
 
 export interface AttentionPuzzle extends BasePuzzle {
@@ -309,6 +313,11 @@ export interface GenerateOptions {
   eliteType?: string;
   challengeId?: string;
   familyDifficultyAdjust?: number;
+  /** Reuse a prior sequence (Archivist recall). */
+  sharedSequence?: MemorySymbol[];
+  sharedSymbolPool?: MemorySymbol[];
+  /** Archivist memorize stage — no recall input yet. */
+  memorizeOnly?: boolean;
 }
 
 export const PUZZLE_TYPE_LABELS: Record<PuzzleType, string> = {

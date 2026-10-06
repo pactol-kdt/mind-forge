@@ -21,11 +21,12 @@ export const MEMORY_SYMBOL_GLYPHS: Record<MemorySymbol, string> = {
 };
 
 export function sequenceLength(difficulty: number): number {
-  if (difficulty <= 2) return 3;
-  if (difficulty <= 4) return 4;
-  if (difficulty <= 7) return 5;
-  if (difficulty <= 11) return 6;
-  if (difficulty <= 15) return 7;
+  // Gentler early curve: length 5 only after difficulty 7+
+  if (difficulty <= 3) return 3;
+  if (difficulty <= 6) return 4;
+  if (difficulty <= 9) return 5;
+  if (difficulty <= 13) return 6;
+  if (difficulty <= 17) return 7;
   return 8;
 }
 

@@ -18,6 +18,11 @@ export function FeedbackOverlay({ feedback }: FeedbackOverlayProps) {
   } = feedback;
 
   const saved = Boolean(secondChanceSaved);
+  const lockedIn =
+    correct &&
+    !saved &&
+    pointsEarned === 0 &&
+    feedback.bossAdvance === "continue";
 
   return (
     <motion.div
@@ -68,10 +73,16 @@ export function FeedbackOverlay({ feedback }: FeedbackOverlayProps) {
               : "text-rose-200",
         ].join(" ")}
       >
-        {saved ? "Second Chance" : correct ? "Correct" : "Incorrect"}
+        {saved
+          ? "Second Chance"
+          : lockedIn
+            ? "Locked In"
+            : correct
+              ? "Correct"
+              : "Incorrect"}
       </p>
 
-      {correct && !saved ? (
+      {correct && !saved && !lockedIn ? (
         <>
           <p className="mt-2 font-mono text-3xl font-semibold text-cyan-300">
             +{pointsEarned}
@@ -82,8 +93,17 @@ export function FeedbackOverlay({ feedback }: FeedbackOverlayProps) {
             </p>
           ) : null}
         </>
+      ) : lockedIn ? (
+        <p className="mt-3 text-sm text-slate-300">Hold that sequence…</p>
       ) : saved ? (
-        <p className="mt-3 text-sm text-amber-100/90">Life protected — charge used</p>
+        <>
+          <p className="mt-3 text-sm text-amber-100/90">Life protected — charge used</p>
+          {feedback.bossAdvance === "retry" ? (
+            <p className="mt-2 text-sm font-medium text-amber-200/90">
+              Retrying this boss…
+            </p>
+          ) : null}
+        </>
       ) : (
         <>
           {correctAnswerDisplay ? (
@@ -93,6 +113,11 @@ export function FeedbackOverlay({ feedback }: FeedbackOverlayProps) {
             </p>
           ) : null}
           <p className="mt-3 text-sm text-rose-300/90">−1 life</p>
+          {feedback.bossAdvance === "retry" ? (
+            <p className="mt-2 text-sm font-medium text-amber-200/90">
+              Retrying this boss…
+            </p>
+          ) : null}
         </>
       )}
     </motion.div>

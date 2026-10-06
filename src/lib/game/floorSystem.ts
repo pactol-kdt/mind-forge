@@ -52,7 +52,11 @@ export function getSpecialAnnouncement(modifier: SpecialModifier): string {
   }
 }
 
-export function getBossAnnouncement(name = "Boss Challenge"): string {
+export function getBossAnnouncement(
+  name = "Boss Challenge",
+  stageLabel?: string
+): string {
+  if (stageLabel) return `${name} — ${stageLabel}`;
   return `${name} — multi-stage encounter`;
 }
 

@@ -12,23 +12,33 @@ import { Button } from "@/components/ui/Button";
 interface UpgradeSelectProps {
   choices: GameUpgrade[];
   announcement?: string | null;
-  confirming?: string | null;
+  /** Selected upgrade waiting for confirm (name shown in header) */
+  pendingName?: string | null;
+  /** True after confirm while floor advances */
+  committing?: boolean;
   owned?: ActiveUpgrade[];
   rerolls?: number;
   onReroll?: () => void;
-  onSelect: (id: string) => void;
+  /** First tap — select candidate */
+  onPick: (id: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
 }
 
 export function UpgradeSelect({
   choices,
   announcement,
-  confirming,
+  pendingName,
+  committing,
   owned = [],
   rerolls = 0,
   onReroll,
-  onSelect,
+  onPick,
+  onConfirm,
+  onCancel,
 }: UpgradeSelectProps) {
   const reduce = useReducedMotion();
+  const locked = Boolean(pendingName) || Boolean(committing);
 
   return (
     <div className="flex flex-1 flex-col gap-4 pt-2">
@@ -37,9 +47,15 @@ export function UpgradeSelect({
           Roguelike Upgrade
         </p>
         <h2 className="mt-2 text-2xl font-bold text-white">
-          {confirming ? confirming : "Choose Your Upgrade"}
+          {committing
+            ? pendingName
+              ? `${pendingName}`
+              : "Continuing…"
+            : pendingName
+              ? `Confirm ${pendingName}?`
+              : "Choose Your Upgrade"}
         </h2>
-        {announcement && !confirming ? (
+        {announcement && !pendingName ? (
           <p className="mt-1 text-sm text-slate-400">{announcement}</p>
         ) : null}
       </div>
@@ -47,21 +63,27 @@ export function UpgradeSelect({
       <div className="flex flex-1 flex-col gap-3">
         {choices.map((upgrade, i) => {
           const synergy = getSynergyHint(owned, upgrade);
+          const selected = pendingName === upgrade.name;
           return (
             <motion.button
               key={upgrade.id}
               type="button"
-              disabled={Boolean(confirming)}
+              disabled={locked && !selected}
               initial={reduce ? false : { opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.06 }}
-              onClick={() => onSelect(upgrade.id)}
+              onClick={() => {
+                if (committing) return;
+                if (selected) return;
+                onPick(upgrade.id);
+              }}
               className={[
                 "rounded-2xl border bg-slate-900/90 p-4 text-left transition-colors",
                 "hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400",
                 "touch-manipulation min-h-[4.5rem]",
                 RARITY_COLORS[upgrade.rarity],
-                confirming === upgrade.name ? "ring-2 ring-cyan-400" : "",
+                selected ? "ring-2 ring-cyan-400" : "",
+                locked && !selected ? "opacity-50" : "",
               ].join(" ")}
             >
               <div className="flex items-start justify-between gap-2">
@@ -81,7 +103,20 @@ export function UpgradeSelect({
         })}
       </div>
 
-      {!confirming ? (
+      {committing ? (
+        <Button fullWidth disabled variant="secondary">
+          Continuing…
+        </Button>
+      ) : pendingName ? (
+        <div className="space-y-2 pb-2">
+          <Button fullWidth size="lg" onClick={onConfirm}>
+            Confirm
+          </Button>
+          <Button fullWidth size="md" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
+      ) : (
         <div className="space-y-2 pb-2">
           {rerolls > 0 && onReroll ? (
             <Button fullWidth size="md" variant="secondary" onClick={onReroll}>
@@ -92,10 +127,6 @@ export function UpgradeSelect({
             Choose one — lasts for this run
           </p>
         </div>
-      ) : (
-        <Button fullWidth disabled variant="secondary">
-          Continuing…
-        </Button>
       )}
     </div>
   );

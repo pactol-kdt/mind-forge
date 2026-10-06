@@ -142,18 +142,41 @@ function buildMemory(
     difficulty
   );
   const size = poolSize(difficulty);
-  const pool = MEMORY_SYMBOLS.slice(0, size);
-  const length =
-    variant === "boss"
-      ? Math.min(8, sequenceLength(difficulty) + 1)
-      : sequenceLength(difficulty);
-  const display =
+  const pool = options?.sharedSymbolPool?.length
+    ? options.sharedSymbolPool
+    : MEMORY_SYMBOLS.slice(0, size);
+  let length = sequenceLength(difficulty);
+  const hasDistraction = variant === "boss" || variant === "interference";
+  // Boss: +1 length only at higher difficulty (not every boss)
+  if (variant === "boss" && difficulty >= 12) {
+    length = Math.min(8, length + 1);
+  }
+  // Distraction already loads working memory — shorten by 1 (min 3)
+  if (hasDistraction) {
+    length = Math.max(3, length - 1);
+  }
+  // Early bosses (floor ≤ 20): hard cap at 5 shapes
+  const floor = options?.floor ?? 0;
+  if (variant === "boss" && floor > 0 && floor <= 20) {
+    length = Math.min(length, 5);
+  }
+  // Archivist multi-stage: same length rules as mild distraction (no nested boss)
+  if (options?.memorizeOnly || options?.sharedSequence?.length) {
+    length = Math.min(Math.max(3, length), floor > 0 && floor <= 20 ? 5 : 8);
+  }
+  let display =
     displayDurationMs(difficulty) + (options?.displayBonusMs ?? 0);
+  if (hasDistraction || options?.memorizeOnly) {
+    display += 600;
+  }
   const timeBonus = options?.timeBonusPct ?? 0;
   const minTime = getFamilyMeta(variant)?.minTimeLimitMs ?? 8000;
   const baseLimit = clamp(12000 + length * 1500, minTime, 28000);
   const timeLimit = Math.max(minTime, Math.round(baseLimit * (1 + timeBonus)));
-  const sequence = Array.from({ length }, () => rng.pick(pool));
+  const sequence =
+    options?.sharedSequence?.length && options.sharedSequence.length >= 3
+      ? options.sharedSequence
+      : Array.from({ length }, () => rng.pick(pool));
 
   if (variant === "missing") {
     const twoMissing = difficulty >= 12;
@@ -356,7 +379,8 @@ function buildMemory(
     });
   }
 
-  // sequence / reverse
+  // sequence / reverse (and Archivist memorize / recall)
+  const isRecall = Boolean(options?.sharedSequence?.length);
   return attachMeta({
     id: makeId("mem"),
     type: "memory",
@@ -364,8 +388,19 @@ function buildMemory(
     difficulty,
     sequence,
     symbolPool: pool,
-    displayDurationMs: display,
-    timeLimit,
+    displayDurationMs: options?.memorizeOnly
+      ? display
+      : isRecall
+        ? 0
+        : display,
+    timeLimit: options?.memorizeOnly ? undefined : timeLimit,
+    memorizeOnly: options?.memorizeOnly || undefined,
+    skipPresenting: isRecall || undefined,
+    prompt: options?.memorizeOnly
+      ? "Memorize this sequence — a distraction comes next"
+      : isRecall
+        ? "Recall the sequence from earlier"
+        : undefined,
   });
 }
 

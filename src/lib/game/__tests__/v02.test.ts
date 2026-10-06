@@ -17,6 +17,7 @@ import {
   createInitialCategoryDifficulty,
 } from "@/types/game";
 import { memoryEngine } from "@/lib/puzzles/memory";
+import { sequenceLength } from "@/lib/puzzles/shared";
 import { attentionEngine } from "@/lib/puzzles/attention";
 import { mathEngine } from "@/lib/puzzles/math";
 import { combinedEngine } from "@/lib/puzzles/combined";
@@ -126,6 +127,50 @@ describe("puzzle generation", () => {
         puzzle.distraction!.correctAnswer
       );
     }
+  });
+
+  it("Archivist memorize/recall stay linked without nested boss distraction", () => {
+    const memorize = memoryEngine.generate(8, {
+      forceVariant: "sequence",
+      memorizeOnly: true,
+      floor: 10,
+    });
+    expect(memorize.memorizeOnly).toBe(true);
+    expect(memorize.distraction).toBeUndefined();
+    expect(memorize.sequence.length).toBeGreaterThanOrEqual(3);
+
+    const recall = memoryEngine.generate(8, {
+      forceVariant: "sequence",
+      sharedSequence: memorize.sequence,
+      sharedSymbolPool: memorize.symbolPool,
+      floor: 10,
+    });
+    expect(recall.skipPresenting).toBe(true);
+    expect(recall.sequence).toEqual(memorize.sequence);
+    expect(recall.distraction).toBeUndefined();
+    expect(memoryEngine.validate(recall, memorize.sequence)).toBe(true);
+  });
+
+  it("memory sequence length follows gentler difficulty curve", () => {
+    expect(sequenceLength(1)).toBe(3);
+    expect(sequenceLength(3)).toBe(3);
+    expect(sequenceLength(4)).toBe(4);
+    expect(sequenceLength(6)).toBe(4);
+    expect(sequenceLength(7)).toBe(5);
+    expect(sequenceLength(9)).toBe(5);
+    expect(sequenceLength(10)).toBe(6);
+    expect(sequenceLength(14)).toBe(7);
+    expect(sequenceLength(20)).toBe(8);
+  });
+
+  it("early boss memory caps sequence length with distraction", () => {
+    const puzzle = memoryEngine.generate(8, {
+      forceVariant: "boss",
+      floor: 10,
+    });
+    // base length at diff 8 = 5, distraction -1 = 4, floor≤20 cap 5 → 4
+    expect(puzzle.sequence.length).toBeLessThanOrEqual(5);
+    expect(puzzle.distraction).toBeTruthy();
   });
 
   it("logic puzzles have unique choices and one answer", () => {

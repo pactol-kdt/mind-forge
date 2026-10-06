@@ -1,4 +1,4 @@
-import type { PuzzleType } from "./puzzles";
+import type { PuzzleType, MemorySymbol } from "./puzzles";
 import { emptyCategoryRecord } from "./categories";
 
 export type GameStatus =
@@ -160,6 +160,11 @@ export interface GameRun {
   elitesCleared: number;
   bossId?: string;
   bossStageIndex: number;
+  /** Archivist: sequence memorized in stage 1, recalled in stage 3 */
+  bossMemory?: {
+    sequence: MemorySymbol[];
+    symbolPool: MemorySymbol[];
+  };
   eliteType?: import("./run").EliteType;
   choiceCategory?: PuzzleType;
   gambleRisk?: boolean;
@@ -188,6 +193,9 @@ export interface LifetimeStats {
 
 export type GameStats = LifetimeStats;
 
+/** Decided at submit time so last-stage clears cannot re-announce. */
+export type BossAdvance = "continue" | "retry" | "clear";
+
 export interface FeedbackState {
   correct: boolean;
   pointsEarned: number;
@@ -195,6 +203,8 @@ export interface FeedbackState {
   streak: number;
   secondChanceSaved?: boolean;
   xpGained?: number;
+  /** Boss-only: which transition to take after feedback. */
+  bossAdvance?: BossAdvance;
 }
 
 export type PuzzlePhase =

@@ -10,6 +10,7 @@ import type {
   PuzzleAnswer,
   PuzzleType,
 } from "@/types/puzzles";
+import { getBoss, bossStageForceVariant, isLinkedMemoryBoss } from "@/lib/game/bosses";
 import { selectPuzzleType } from "@/lib/game/puzzleSelector";
 import { applyDifficultyDelta } from "@/lib/game/adaptiveDifficulty";
 import {
@@ -48,6 +49,14 @@ export interface GeneratePuzzleContext {
   seed?: string;
   challengeId?: string;
   familyStats?: Record<string, { accuracy: number; attempts: number }>;
+  /** Boss stage kind (Archivist memorize / solve / recall). */
+  bossStageKind?: import("@/lib/game/bosses").BossStageKind;
+  bossId?: string;
+  bossStageIndex?: number;
+  bossMemory?: {
+    sequence: MemorySymbol[];
+    symbolPool: MemorySymbol[];
+  };
 }
 
 export function generatePuzzle(ctx: GeneratePuzzleContext): Puzzle {
@@ -109,14 +118,33 @@ export function generatePuzzle(ctx: GeneratePuzzleContext): Puzzle {
 
   const unlocked = ctx.unlockedVariants ?? [];
 
-  // Elite family overrides
+  // Elite / boss family overrides
   let forceVariant = optionsForce(ctx, type);
   if (ctx.eliteType === "logic-chain") forceVariant = forceVariant ?? "conditional";
   if (ctx.eliteType === "spatial-shift") forceVariant = forceVariant ?? "block-shift";
   if (ctx.eliteType === "perfect-recall") forceVariant = "interference";
-  if (ctx.eliteType === "rapid-fire") {
-    // prefer fast families via challenge-like flag in options
+
+  const boss = ctx.bossId ? getBoss(ctx.bossId) : undefined;
+  const stageIndex = ctx.bossStageIndex ?? 0;
+  const linkedMemory = Boolean(boss && isLinkedMemoryBoss(boss));
+  const archivistMemorize = linkedMemory && ctx.bossStageKind === "memorize";
+  const archivistRecall = linkedMemory && ctx.bossStageKind === "recall";
+
+  // Per-stage boss variants (Architect rotation → block-shift, etc.)
+  if (boss && ctx.floorType === "boss") {
+    const stageVariant = bossStageForceVariant(boss, stageIndex);
+    if (stageVariant) forceVariant = stageVariant;
   }
+  if (archivistMemorize || archivistRecall) {
+    forceVariant = "sequence";
+  }
+
+  // When a stage forces a family, don't also force generic "boss" variant via floorType
+  const useBossFloorType =
+    ctx.floorType === "boss" &&
+    !forceVariant &&
+    !archivistMemorize &&
+    !archivistRecall;
 
   const options: GenerateOptions = {
     displayBonusMs: getMemoryDisplayBonusMs(ctx.upgrades),
@@ -127,8 +155,9 @@ export function generatePuzzle(ctx: GeneratePuzzleContext): Puzzle {
     recentFamilies: ctx.recentFamilies,
     eliteType: ctx.eliteType,
     challengeId: ctx.challengeId,
-    floorType:
-      ctx.floorType === "boss"
+    floorType: archivistMemorize || archivistRecall
+      ? "special"
+      : useBossFloorType
         ? "boss"
         : ctx.specialModifier === "memory-trial" || ctx.eliteType === "perfect-recall"
           ? "special"
@@ -136,6 +165,9 @@ export function generatePuzzle(ctx: GeneratePuzzleContext): Puzzle {
             ? "special"
             : "normal",
     forceVariant,
+    memorizeOnly: archivistMemorize || undefined,
+    sharedSequence: archivistRecall ? ctx.bossMemory?.sequence : undefined,
+    sharedSymbolPool: archivistRecall ? ctx.bossMemory?.symbolPool : undefined,
   };
 
   const engineMap = {
@@ -154,6 +186,20 @@ function optionsForce(
   ctx: GeneratePuzzleContext,
   type: PuzzleType
 ): string | undefined {
+  const boss = ctx.bossId ? getBoss(ctx.bossId) : undefined;
+  const linked = Boolean(boss && isLinkedMemoryBoss(boss));
+  // Linked Archivist memory stages are sequence, not nested boss puzzles
+  if (
+    linked &&
+    (ctx.bossStageKind === "memorize" || ctx.bossStageKind === "recall")
+  ) {
+    return "sequence";
+  }
+  // Prefer per-stage variants over generic memory-boss
+  if (boss && ctx.floorType === "boss") {
+    const stageVariant = bossStageForceVariant(boss, ctx.bossStageIndex ?? 0);
+    if (stageVariant) return stageVariant;
+  }
   if (ctx.floorType === "boss" && type === "memory") return "boss";
   if (ctx.specialModifier === "memory-trial") return "reverse";
   return undefined;
@@ -161,6 +207,10 @@ function optionsForce(
 
 /** Ensure timers never collapse to 0/NaN (which hides the bar and blocks timeout). */
 export function ensurePlayableTimeLimit(puzzle: Puzzle): Puzzle {
+  // Memorize-only Archivist stage has no answer timer
+  if (puzzle.type === "memory" && puzzle.memorizeOnly) {
+    return { ...puzzle, timeLimit: undefined };
+  }
   const minMs = 6000;
   if (
     puzzle.timeLimit == null ||
@@ -256,7 +306,10 @@ export function formatCorrectAnswer(puzzle: Puzzle): string {
 export function puzzleInitialPhase(
   puzzle: Puzzle
 ): "presenting" | "answering" {
-  if (puzzle.type === "memory") return "presenting";
+  if (puzzle.type === "memory") {
+    if (puzzle.skipPresenting) return "answering";
+    return "presenting";
+  }
   if (puzzle.type === "combined") {
     if (
       puzzle.variant === "memory-math" ||

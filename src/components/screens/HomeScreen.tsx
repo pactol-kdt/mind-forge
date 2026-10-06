@@ -20,6 +20,7 @@ import { clearUnlockNotices } from "@/lib/progression/unlocks";
 import { saveGameData, loadGameData } from "@/lib/storage/gameStorage";
 import { useEffect } from "react";
 import { SyncStatusBadge } from "@/components/account/SyncStatusBadge";
+import { formatAppVersion } from "@/lib/appVersion";
 
 function formatNumber(value: number): string {
   return value.toLocaleString("en-US");
@@ -68,6 +69,9 @@ export function HomeScreen() {
           </h1>
           <p className="mt-1 text-sm text-slate-400">
             Train your mind. Climb forever.
+          </p>
+          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-slate-600">
+            {formatAppVersion()}
           </p>
           <div className="mt-2">
             <SyncStatusBadge />

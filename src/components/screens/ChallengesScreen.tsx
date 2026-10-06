@@ -15,14 +15,9 @@ import { CHALLENGE_DEFINITIONS } from "@/lib/game/challenges";
 import { setPendingRunConfig } from "@/lib/game/pendingRun";
 import type { PuzzleType } from "@/types/puzzles";
 import { PUZZLE_TYPE_LABELS } from "@/types/puzzles";
+import { FOCUS_CATEGORY_OPTS } from "@/lib/game/choicePath";
 
-const SPECIALIST_OPTS: PuzzleType[] = [
-  "memory",
-  "attention",
-  "math",
-  "logic",
-  "spatial",
-];
+const SPECIALIST_OPTS = FOCUS_CATEGORY_OPTS;
 
 export function ChallengesScreen() {
   const router = useRouter();

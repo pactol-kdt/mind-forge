@@ -23,7 +23,6 @@ import {
 import { applyScoreMultipliers, streakBonus } from "@/lib/game/scoring";
 import { updateCategoryDifficulty } from "@/lib/game/adaptiveDifficulty";
 import {
-  getBossAnnouncement,
   getFloorConfig,
   getSpecialAnnouncement,
   getUpgradeAnnouncement,
@@ -80,7 +79,7 @@ import {
 } from "@/lib/game/dailyTraining";
 import { composeRunEffects, modeBestKey, resolveRunConfig } from "@/lib/game/runConfig";
 import { createSeededRng, deriveSeed } from "@/lib/game/seededRandom";
-import { pickBossForFloor, getBoss } from "@/lib/game/bosses";
+import { pickBossForFloor, getBoss, resolveBossAdvance, bossRetryStageIndex, formatBossRetryAnnouncement, formatBossStageAnnouncement, isLinkedMemoryBoss } from "@/lib/game/bosses";
 import { getRunArchetype } from "@/lib/game/runArchetypes";
 import { evaluateUnlocks } from "@/lib/progression/unlocks";
 import { evaluateObjectives } from "@/lib/challenges/challengeObjectives";
@@ -156,8 +155,29 @@ function buildPuzzleForFloor(
   forceCategory?: PuzzleType
 ): { puzzle: Puzzle; recentTypes: PuzzleType[]; runPatch: Partial<GameRun> } {
   const params = pacingParams(run);
+  // Boss/elite stage continuations pass forceCategory but must keep floor difficulty.
+  // Choice-path picks also pass forceCategory but must keep floorType "choice".
+  const continuingBoss = Boolean(forceCategory && run.floorType === "boss");
+  const continuingElite = Boolean(forceCategory && run.floorType === "elite");
+  const continuingChoice = Boolean(forceCategory && run.floorType === "choice");
   const floorCfg = forceCategory
-    ? { floor: run.floor, type: "normal" as const, rewardMultiplier: 1 }
+    ? {
+        floor: run.floor,
+        type: continuingBoss
+          ? ("boss" as const)
+          : continuingElite
+            ? ("elite" as const)
+            : continuingChoice
+              ? ("choice" as const)
+              : ("normal" as const),
+        rewardMultiplier: continuingBoss
+          ? 2
+          : continuingElite
+            ? 1.5
+            : continuingChoice
+              ? 1.3
+              : 1,
+      }
     : getFloorConfig(run.floor, params);
 
   let specialModifier: SpecialModifier | null = null;
@@ -178,36 +198,65 @@ function buildPuzzleForFloor(
       );
       bossId = boss.id;
       bossStageIndex = 0;
-      announcement = getBossAnnouncement(boss.name);
       const stage = boss.stages[0];
+      announcement = formatBossStageAnnouncement(boss, 0);
       if (stage) forceCat = stage.category;
     } else if (floorCfg.type === "elite") {
       eliteType = floorCfg.eliteType;
+      // Elite multi-stage uses bossStageIndex; reset so post-boss leftovers don't block stage 2
+      bossStageIndex = 0;
       announcement = floorCfg.announcement ?? "Elite Floor";
     } else if (floorCfg.type === "special" && floorCfg.specialType) {
-      specialModifier = floorCfg.specialType as SpecialModifier;
-      announcement = getSpecialAnnouncement(specialModifier);
-      perfectMindArmed = specialModifier === "perfect-mind";
+      // Keep an already-committed special (e.g. gamble after Safe/Risk)
+      if (run.specialModifier && run.gambleRisk !== undefined) {
+        specialModifier = run.specialModifier;
+        announcement = null;
+        perfectMindArmed = Boolean(run.perfectMindArmed);
+      } else {
+        specialModifier = floorCfg.specialType as SpecialModifier;
+        announcement = getSpecialAnnouncement(specialModifier);
+        perfectMindArmed = specialModifier === "perfect-mind";
+      }
     } else if (floorCfg.type === "choice") {
       announcement =
         floorCfg.announcement ??
-        "CHOOSE YOUR PATH — Memory Trial or Logic Trial";
+        "CHOOSE YOUR PATH — pick a trial for +30% reward this floor";
+    } else {
+      // Leaving boss/elite: clear stage cursor so it can't leak into later elites
+      bossStageIndex = 0;
     }
+  } else if (continuingElite) {
+    eliteType = run.eliteType;
+  } else if (forceCategory && run.floorType === "choice") {
+    // Path choice: keep choice floor identity for scoring (+30%)
   }
 
   const effects = params.effects;
-  const rng = createSeededRng(deriveSeed(run.seed, "puzzle", run.floor, bossStageIndex));
+  const rng = createSeededRng(
+    deriveSeed(run.seed, "puzzle", run.floor, bossStageIndex, run.totalAnswers)
+  );
 
   let difficultyDelta = effects.startingDifficultyDelta ?? 0;
+  let bossStageKind: import("@/lib/game/bosses").BossStageKind | undefined;
   if (bossId && floorCfg.type === "boss") {
     const boss = getBoss(bossId);
     const stage = boss?.stages[bossStageIndex];
     difficultyDelta += (boss?.difficultyModifier ?? 0) + (stage?.difficultyBonus ?? 0);
+    bossStageKind = stage?.kind;
+  }
+
+  // Fresh boss encounter: drop any leftover memorized sequence
+  let bossMemory = run.bossMemory;
+  if (floorCfg.type === "boss" && bossStageIndex === 0 && !forceCategory) {
+    bossMemory = undefined;
+  }
+  if (floorCfg.type !== "boss" && floorCfg.type !== "elite") {
+    bossMemory = undefined;
   }
 
   const puzzle = generatePuzzle({
     floor: run.floor,
-    floorType: forceCategory ? "normal" : floorCfg.type,
+    floorType: floorCfg.type === "choice" ? "normal" : floorCfg.type,
     recentTypes,
     categoryDifficulty: run.categoryDifficulty,
     upgrades: run.upgrades,
@@ -227,19 +276,24 @@ function buildPuzzleForFloor(
     seed: run.seed,
     recentFamilies: run.recentFamilies,
     challengeId: run.challengeId,
+    bossStageKind,
+    bossId: bossId ?? undefined,
+    bossStageIndex,
+    bossMemory,
   });
 
   return {
     puzzle,
     recentTypes: [...recentTypes, puzzle.type].slice(-8),
     runPatch: {
-      floorType: forceCategory ? "normal" : floorCfg.type,
+      floorType: floorCfg.type,
       specialModifier,
       announcement,
       perfectMindArmed,
-      bossId,
+      bossId: floorCfg.type === "boss" ? bossId : undefined,
       bossStageIndex,
-      eliteType: floorCfg.type === "elite" ? eliteType : undefined,
+      bossMemory: floorCfg.type === "boss" ? bossMemory : undefined,
+      eliteType: floorCfg.type === "elite" ? eliteType : continuingElite ? eliteType : undefined,
       recentFamilies: [...run.recentFamilies, puzzle.family ?? puzzle.variant].slice(-12),
       status: announcement
         ? "announce"
@@ -305,7 +359,7 @@ function enterFloor(
 
   if (floorCfg.type === "upgrade") {
     const choices = selectUpgradeChoices(baseRun.upgrades, 3, {
-      seed: baseRun.seed,
+      seed: `${baseRun.seed}:floor:${nextFloor}`,
       unlockedUpgradeIds: data.meta.unlockedUpgradeIds,
     });
     set({
@@ -321,6 +375,7 @@ function enterFloor(
         status: "upgrade",
         perfectMindArmed: false,
         eliteType: undefined,
+        bossStageIndex: 0,
       },
       puzzle: null,
       phase: "answering",
@@ -338,7 +393,7 @@ function enterFloor(
     const ownedDefs = baseRun.upgrades
       .map((a) => {
         const fromCatalog = selectUpgradeChoices([a], 1, {
-          seed: baseRun.seed,
+          seed: `${baseRun.seed}:forge:${nextFloor}:${a.upgradeId}`,
           unlockedUpgradeIds: data.meta.unlockedUpgradeIds,
         })[0];
         return fromCatalog;
@@ -348,7 +403,7 @@ function enterFloor(
       ownedDefs.length > 0
         ? ownedDefs.slice(0, 3)
         : selectUpgradeChoices(baseRun.upgrades, 3, {
-            seed: baseRun.seed,
+            seed: `${baseRun.seed}:forge:${nextFloor}`,
             unlockedUpgradeIds: data.meta.unlockedUpgradeIds,
           });
     set({
@@ -363,6 +418,7 @@ function enterFloor(
         announcement: getSpecialAnnouncement("upgrade-forge"),
         status: "upgrade",
         perfectMindArmed: false,
+        bossStageIndex: 0,
       },
       puzzle: null,
       phase: "answering",
@@ -808,7 +864,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const { run, recentTypes } = get();
     if (run.floorType !== "choice") return;
     const data = loadGameData();
-    const draft = { ...run, choiceCategory: category, announcement: null, status: "playing" as const };
+    const draft = {
+      ...run,
+      choiceCategory: category,
+      announcement: null,
+      status: "playing" as const,
+    };
     const { puzzle, recentTypes: nextRecent, runPatch } = buildPuzzleForFloor(
       draft,
       recentTypes,
@@ -817,7 +878,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     );
     const phase = puzzleInitialPhase(puzzle);
     set({
-      run: { ...draft, ...runPatch, announcement: null, status: "playing" },
+      run: {
+        ...draft,
+        ...runPatch,
+        floorType: "choice",
+        choiceCategory: category,
+        announcement: null,
+        status: "playing",
+      },
       puzzle,
       recentTypes: nextRecent,
       phase,
@@ -834,6 +902,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       gambleRisk: risk,
       announcement: null,
       status: "playing" as const,
+      specialModifier: "gamble" as const,
       scoreMultiplier: risk ? run.scoreMultiplier * 1.5 : run.scoreMultiplier,
     };
     // Rebuild with difficulty bump if risk
@@ -856,7 +925,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
     );
     const phase = puzzleInitialPhase(puzzle);
     set({
-      run: { ...draft, ...runPatch, announcement: null, status: "playing" },
+      run: {
+        ...draft,
+        ...runPatch,
+        // Never let a re-roll replace the committed gamble special
+        specialModifier: "gamble",
+        gambleRisk: risk,
+        announcement: null,
+        status: "playing",
+        scoreMultiplier: draft.scoreMultiplier,
+      },
       puzzle,
       recentTypes: nextRecent,
       phase,
@@ -865,7 +943,50 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   beginAnswering: () => {
-    const { puzzle } = get();
+    const { puzzle, run } = get();
+    // Archivist memorize stage: lock sequence and advance (no recall yet)
+    if (
+      puzzle?.type === "memory" &&
+      puzzle.memorizeOnly &&
+      run.floorType === "boss"
+    ) {
+      const boss = run.bossId ? getBoss(run.bossId) : undefined;
+      if (!boss || !isLinkedMemoryBoss(boss)) {
+        set({ phase: "answering", puzzleStartedAt: Date.now() });
+        return;
+      }
+      const bossAdvance = resolveBossAdvance(
+        run.bossStageIndex,
+        boss?.stages.length ?? 0,
+        true,
+        false
+      );
+      playCorrect();
+      set({
+        run: {
+          ...run,
+          bossMemory: {
+            sequence: puzzle.sequence,
+            symbolPool: puzzle.symbolPool,
+          },
+          bossStageIndex: run.bossStageIndex + 1,
+          status: "feedback",
+          puzzlesCompleted: run.puzzlesCompleted + 1,
+        },
+        phase: "feedback",
+        feedback: {
+          correct: true,
+          pointsEarned: 0,
+          streak: run.streak,
+          bossAdvance,
+        },
+        lastPointsEarned: 0,
+      });
+      window.setTimeout(() => {
+        get().advanceAfterFeedback();
+      }, FEEDBACK_MS);
+      return;
+    }
     if (
       puzzle?.type === "memory" &&
       (puzzle.variant === "boss" || puzzle.variant === "interference")
@@ -984,6 +1105,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (run.perfectMindArmed) multipliers.push(0.5);
       if (run.floorType === "elite") multipliers.push(0.5);
       if (run.floorType === "boss") multipliers.push(0.8);
+      // Choice path advertises +30% reward
+      if (run.floorType === "choice" && run.choiceCategory) {
+        multipliers.push(0.3);
+      }
       if (run.scoreMultiplier !== 1) {
         multipliers.push(run.scoreMultiplier - 1);
       }
@@ -997,21 +1122,27 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (run.specialModifier === "recovery") {
         lives = Math.min(run.maxLives, lives + 1);
       }
-      if (run.floorType === "elite") elitesCleared += 1;
+      // Count elite clear once per floor (two-stage elites only on final stage)
+      if (run.floorType === "elite") {
+        const multiStage =
+          run.eliteType === "logic-chain" || run.eliteType === "mixed-trial";
+        if (!multiStage || run.bossStageIndex > 0) {
+          elitesCleared += 1;
+        }
+      }
       if (run.floorType === "boss") {
-        // Multi-stage: advance or complete
         const boss = run.bossId ? getBoss(run.bossId) : undefined;
-        const nextStage = run.bossStageIndex + 1;
-        if (boss && nextStage < boss.stages.length) {
-          // Continue boss on same floor after feedback via special advance
-          // Mark progress on run; advanceAfterFeedback will detect
-        } else {
+        const advance = resolveBossAdvance(
+          run.bossStageIndex,
+          boss?.stages.length ?? 0,
+          true,
+          false
+        );
+        if (advance === "clear") {
           bossesDefeated += 1;
           if (boss) {
             points = Math.round(points * (boss.rewardMultiplier / 2));
           }
-          // Chance for extra reroll
-          // handled below in updated run
         }
       }
       playCorrect();
@@ -1104,14 +1235,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
       bossesDefeated,
       elitesCleared,
       upgradeRerolls,
+      // Advance stage cursor on every real clear; continue uses bossAdvance.
       bossStageIndex:
         correct &&
         !secondChanceSaved &&
-        run.floorType === "boss" &&
-        bossesDefeated === run.bossesDefeated
+        run.floorType === "boss"
           ? run.bossStageIndex + 1
           : run.bossStageIndex,
     };
+
+    let bossAdvance: FeedbackState["bossAdvance"];
+    if (run.floorType === "boss") {
+      const boss = run.bossId ? getBoss(run.bossId) : undefined;
+      bossAdvance = resolveBossAdvance(
+        run.bossStageIndex,
+        boss?.stages.length ?? 0,
+        correct,
+        secondChanceSaved
+      );
+    }
 
     const feedback: FeedbackState = {
       correct,
@@ -1123,6 +1265,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       streak: nextStreak,
       secondChanceSaved,
       xpGained: xpGain,
+      bossAdvance,
     };
 
     set({
@@ -1189,12 +1332,55 @@ export const useGameStore = create<GameStore>((set, get) => ({
         return;
       }
 
-      // Continue boss stages on same floor
-      if (
-        run.floorType === "boss" &&
-        feedback.correct &&
-        !feedback.secondChanceSaved
-      ) {
+      // Boss fail / second-chance: retry (Archivist restarts from memorize)
+      if (run.floorType === "boss" && feedback.bossAdvance === "retry") {
+        const boss = run.bossId ? getBoss(run.bossId) : undefined;
+        if (boss && run.bossStageIndex < boss.stages.length) {
+          const data = loadGameData();
+          const linkedRestart = bossRetryStageIndex(boss);
+          const retryIndex =
+            linkedRestart >= 0 ? linkedRestart : run.bossStageIndex;
+          const stage = boss.stages[retryIndex]!;
+          const clearMemory = linkedRestart >= 0;
+          const draft = {
+            ...run,
+            bossStageIndex: retryIndex,
+            bossMemory: clearMemory ? undefined : run.bossMemory,
+            status: "playing" as const,
+            announcement: formatBossRetryAnnouncement(boss, retryIndex),
+          };
+          const { puzzle, recentTypes: nextRecent, runPatch } =
+            buildPuzzleForFloor(
+              { ...draft, floorType: "boss" },
+              recentTypes,
+              data.profile.unlockedVariants,
+              stage.category
+            );
+          set({
+            run: {
+              ...draft,
+              ...runPatch,
+              floorType: "boss",
+              bossId: boss.id,
+              bossStageIndex: retryIndex,
+              bossMemory: clearMemory ? undefined : run.bossMemory,
+              announcement: formatBossRetryAnnouncement(boss, retryIndex),
+              status: "announce",
+            },
+            puzzle,
+            recentTypes: nextRecent,
+            phase: puzzleInitialPhase(puzzle),
+            feedback: null,
+            puzzleStartedAt: null,
+            lastPointsEarned: 0,
+            distractionCleared: false,
+          });
+          return;
+        }
+      }
+
+      // Continue: index already advanced to the next stage in submitAnswer
+      if (run.floorType === "boss" && feedback.bossAdvance === "continue") {
         const boss = run.bossId ? getBoss(run.bossId) : undefined;
         if (boss && run.bossStageIndex < boss.stages.length) {
           const data = loadGameData();
@@ -1202,7 +1388,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           const draft = {
             ...run,
             status: "playing" as const,
-            announcement: `${boss.name} — ${stage.label}`,
+            announcement: formatBossStageAnnouncement(boss, run.bossStageIndex),
           };
           const { puzzle, recentTypes: nextRecent, runPatch } =
             buildPuzzleForFloor(
@@ -1218,7 +1404,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
               floorType: "boss",
               bossId: boss.id,
               bossStageIndex: run.bossStageIndex,
-              announcement: `${boss.name} — ${stage.label}`,
+              bossMemory: run.bossMemory,
+              announcement: formatBossStageAnnouncement(boss, run.bossStageIndex),
               status: "announce",
             },
             puzzle,

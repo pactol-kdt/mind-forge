@@ -106,11 +106,13 @@ export function MemoryPuzzleView({
           ))}
         </div>
         <p className="text-xs text-slate-500">
-          {puzzle.variant === "reverse"
-            ? "Memorize — you will enter it in reverse"
-            : puzzle.variant === "boss"
-              ? "Memorize — a distraction comes next"
-              : "Memorize…"}
+          {puzzle.memorizeOnly
+            ? "Memorize — hold it through the next challenge"
+            : puzzle.variant === "reverse"
+              ? "Memorize — you will enter it in reverse"
+              : puzzle.variant === "boss"
+                ? "Memorize — a distraction comes next"
+                : "Memorize…"}
         </p>
       </div>
     );

@@ -14,6 +14,7 @@ import {
 } from "@/lib/storage/gameStorage";
 import { useHasMounted } from "@/hooks/useHasMounted";
 import { setMuted } from "@/lib/game/feedbackFx";
+import { formatAppVersion } from "@/lib/appVersion";
 
 export function SettingsScreen() {
   const router = useRouter();
@@ -111,6 +112,9 @@ export function SettingsScreen() {
         <Button fullWidth variant="secondary" onClick={() => router.push("/")}>
           Home
         </Button>
+        <p className="pt-1 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-slate-600">
+          Mindforge {formatAppVersion()}
+        </p>
       </div>
     </MobileContainer>
   );
